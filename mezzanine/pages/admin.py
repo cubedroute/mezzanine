@@ -1,17 +1,25 @@
 
 from copy import deepcopy
+from datetime import datetime
 
 from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.core.urlresolvers import NoReverseMatch
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
+from django.contrib.contenttypes.models import ContentType
 
 from mezzanine.conf import settings
 from mezzanine.core.admin import DisplayableAdmin, DisplayableAdminForm
-from mezzanine.pages.models import Page, RichTextPage, Link
+from mezzanine.pages.models import Page, RichTextPage, Link, ModeratedPage, \
+    Workflow
+from mezzanine.core.models import CONTENT_STATUS_DRAFT, CONTENT_STATUS_PUBLISHED
 from mezzanine.utils.urls import admin_url
 
+try:
+    import reversion
+except ImportError:
+    reversion = None
 
 page_fieldsets = deepcopy(DisplayableAdmin.fieldsets)
 page_fieldsets[0][1]["fields"] += ("in_menus", "login_required",)
@@ -236,6 +244,85 @@ class LinkAdmin(PageAdmin):
         return super(LinkAdmin, self).save_form(request, form, change)
 
 
+moderated_page_fieldsets = deepcopy(page_fieldsets)
+moderated_page_fieldsets[0][1]["fields"] += ("owning_group",)
+moderated_page_fieldsets[0][1]["fields"].remove("status")
+
+
+class ModeratedPageAdmin(PageAdmin):
+    
+    fieldsets = moderated_page_fieldsets
+    
+    def _is_publisher(self, request):
+        return request.user.groups.filter(name="Publisher").exists()
+    
+    def _is_author(self, request):
+        return request.user.groups.filter(name="Author").exists()
+
+    def render_change_form(self, request, context, *args, **kwargs):
+        context['author'] = self._is_author(request)
+        context['publisher'] = self._is_publisher(request)
+        return super(ModeratedPageAdmin, self).render_change_form(
+            request, context, *args, **kwargs)
+        
+    def save_model(self, request, obj, form, change):
+        """
+        Check button clicked and set status accordingly.
+        """
+        is_publisher = self._is_publisher(request)
+        comment = "Saved as draft"
+        next_task_users = []
+        
+        if "save_draft" in request.POST:
+            obj.approval = None
+            obj.status = CONTENT_STATUS_DRAFT
+            next_task_users = [request.user]
+        elif "save_pending" in request.POST:
+            obj.approval = ModeratedPage.PENDING
+            obj.status = CONTENT_STATUS_DRAFT
+            comment = "Saved as pending approval"
+        elif "save_approved" in request.POST and is_publisher:
+            obj.approval = ModeratedPage.APPROVED
+            obj.status = CONTENT_STATUS_PUBLISHED
+            comment = "Approved"
+        elif "save_rejected" in request.POST and is_publisher:
+            obj.approval = ModeratedPage.REJECTED
+            obj.status = CONTENT_STATUS_DRAFT
+            comment = "Rejected"
+        elif "save_published" in request.POST and is_publisher:
+            obj.approval = ModeratedPage.APPROVED
+            obj.status = CONTENT_STATUS_PUBLISHED
+            obj.publish_date = datetime.now()
+            comment = "Published"
+        
+        if reversion:
+            with reversion.create_revision():
+                obj.save()
+                reversion.set_user(request.user)
+                reversion.set_comment(comment)
+        else:
+            obj.save()
+            
+        if obj.approval == ModeratedPage.PENDING:
+            next_task_users = obj.send_pending_email()
+            
+        try:
+            workflow_record = Workflow.objects.get(
+                content_type=ContentType.objects.get_for_model(obj),
+                object_id=obj.id)
+        except Workflow.DoesNotExist:
+            workflow_record = Workflow(
+                content_type=ContentType.objects.get_for_model(obj),
+                object_id=obj.id)
+        workflow_record.change_user = request.user
+        workflow_record.status = comment
+        workflow_record.save()
+        
+        workflow_record.task_users = next_task_users
+        workflow_record.save()
+        
+
 admin.site.register(Page, PageAdmin)
 admin.site.register(RichTextPage, PageAdmin)
 admin.site.register(Link, LinkAdmin)
+admin.site.register(ModeratedPage, ModeratedPageAdmin)

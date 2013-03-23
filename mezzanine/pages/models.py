@@ -1,12 +1,17 @@
 from django.core.urlresolvers import resolve, reverse
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
+from django.contrib.auth.models import Group, User
+from django.core.mail import send_mail
+from django.contrib.sites.models import Site
+from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes import generic
 
 from mezzanine.conf import settings
 from mezzanine.core.models import Displayable, Orderable, RichText
 from mezzanine.pages.fields import MenusField
 from mezzanine.pages.managers import PageManager
-from mezzanine.utils.urls import path_to_slug, slugify
+from mezzanine.utils.urls import path_to_slug, slugify, admin_url
 
 
 class BasePage(Orderable, Displayable):
@@ -256,6 +261,59 @@ class Page(BasePage):
         return True
 
 
+class Moderated(models.Model):
+    
+    PENDING = 1
+    APPROVED = 2
+    REJECTED = 3
+    
+    APPROVAL_STATES = (
+        (PENDING, _("Pending")),
+        (APPROVED, _("Approved")),
+        (REJECTED, _("Rejected")),
+    )
+    
+    approval = models.IntegerField(choices=APPROVAL_STATES, null=True, 
+        editable=False)
+    owning_group = models.ForeignKey(Group, verbose_name=_("Owning group"),
+        limit_choices_to=~(models.Q(name="Author") | models.Q(name="Publisher")),
+        blank=True, null=True)
+            
+    class Meta:
+        abstract = True
+        
+    def can_add(self, request):
+        return request.user.groups.filter(name="Author").exists()
+        
+    @property
+    def admin_url(self):
+        return admin_url(self.__class__, "change", self.pk)
+            
+    def send_pending_email(self):
+        subject = "Draft %s needs moderation" % self._meta.verbose_name.lower()
+
+        body = "http://%s%s" % (Site.objects.get_current().domain, self.admin_url)
+        
+        publishers = []
+        if self.owning_group:
+            publishers = self.owning_group.user_set.filter(groups__name="Publisher")
+        publishers = publishers or User.objects.filter(groups__name="Publisher")
+        to = publishers.values_list("email", flat=True).distinct()
+        
+        _from = getattr(settings, "DEFAULT_FROM_EMAIL", None)
+        
+        send_mail(subject, body, _from, to, fail_silently=not(settings.DEBUG))
+        
+        return publishers
+        
+
+class ModeratedPage(Page, Moderated):
+    
+    class Meta:
+        verbose_name = _("Moderated page")
+        verbose_name_plural = _("Moderated pages")
+        
+        
 class RichTextPage(Page, RichText):
     """
     Implements the default type of page with a single Rich Text
@@ -276,3 +334,13 @@ class Link(Page):
     class Meta:
         verbose_name = _("Link")
         verbose_name_plural = _("Links")
+
+
+class Workflow(models.Model):
+    change_user = models.ForeignKey(User, related_name="changes_made") # User who made the change
+    task_users = models.ManyToManyField(User, related_name="tasks_for", blank=True, null=True) # Users on whose task list this item should be shown
+    status = models.CharField(max_length=255)
+    
+    content_type = models.ForeignKey(ContentType)
+    object_id = models.PositiveIntegerField()
+    content_object = generic.GenericForeignKey('content_type', 'object_id')
