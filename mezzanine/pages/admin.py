@@ -1,6 +1,5 @@
 
 from copy import deepcopy
-from datetime import datetime
 
 from django.contrib import admin
 from django.core.exceptions import PermissionDenied
@@ -8,6 +7,7 @@ from django.core.urlresolvers import NoReverseMatch
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.contrib.contenttypes.models import ContentType
+from django.utils.timezone import now
 
 from mezzanine.conf import settings
 from mezzanine.core.admin import DisplayableAdmin, DisplayableAdminForm
@@ -273,11 +273,7 @@ class ModeratedPageAdmin(PageAdmin):
         comment = "Saved as draft"
         next_task_users = []
         
-        if "save_draft" in request.POST:
-            obj.approval = None
-            obj.status = CONTENT_STATUS_DRAFT
-            next_task_users = [request.user]
-        elif "save_pending" in request.POST:
+        if "save_pending" in request.POST:
             obj.approval = ModeratedPage.PENDING
             obj.status = CONTENT_STATUS_DRAFT
             comment = "Saved as pending approval"
@@ -292,8 +288,12 @@ class ModeratedPageAdmin(PageAdmin):
         elif "save_published" in request.POST and is_publisher:
             obj.approval = ModeratedPage.APPROVED
             obj.status = CONTENT_STATUS_PUBLISHED
-            obj.publish_date = datetime.now()
+            obj.publish_date = now()
             comment = "Published"
+        else:
+            obj.approval = None
+            obj.status = CONTENT_STATUS_DRAFT
+            next_task_users = [request.user]
         
         if reversion:
             with reversion.create_revision():
