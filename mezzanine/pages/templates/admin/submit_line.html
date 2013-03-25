@@ -2,7 +2,7 @@
 
 <div class="submit-row" {% if is_popup %}style="overflow: auto;"{% endif %}>
     {% if show_delete_link %}<p class="deletelink-box"><a href="delete/" class="deletelink">{% trans "Delete" %}</a></p>{% endif %}
-    <strong style="font-size:larger">Current Status: {{ current_status.1 }}</strong>
+    {% if current_status %}<strong style="font-size:larger">Current Status: {{ current_status.1 }}</strong>{% endif %}
     {% if author %}
     <input type="submit" value="{% trans 'Save as draft' %}" class="default" name="save_draft" {{ onclick_attrib }}/>
     <input type="submit" value="{% trans 'Save for approval' %}" name="save_pending" {{ onclick_attrib }}/>

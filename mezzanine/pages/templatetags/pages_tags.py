@@ -202,6 +202,7 @@ def mezzanine_submit_row(context):
     change = context['change']
     is_popup = context['is_popup']
     save_as = context['save_as']
+    obj = context.get('original', None)
     return {
         'onclick_attrib': (opts.get_ordered_objects() and change
                             and 'onclick="submitOrderForm();"' or ''),
@@ -215,7 +216,7 @@ def mezzanine_submit_row(context):
         'show_save': True,
         'author': context.get('author', None),
         'publisher': context.get('publisher', None),
-        'current_status': context['original'].current_status
+        'current_status': obj and obj.current_status
     }
 
 
