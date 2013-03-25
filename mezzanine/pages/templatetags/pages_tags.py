@@ -215,6 +215,7 @@ def mezzanine_submit_row(context):
         'show_save': True,
         'author': context.get('author', None),
         'publisher': context.get('publisher', None),
+        'current_status': context['original'].current_status
     }
 
 

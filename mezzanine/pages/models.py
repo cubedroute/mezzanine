@@ -6,9 +6,11 @@ from django.core.mail import send_mail
 from django.contrib.sites.models import Site
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes import generic
+from django.utils.timezone import now
+from django.utils.formats import localize
 
 from mezzanine.conf import settings
-from mezzanine.core.models import Displayable, Orderable, RichText
+from mezzanine.core.models import Displayable, Orderable, RichText, CONTENT_STATUS_DRAFT
 from mezzanine.pages.fields import MenusField
 from mezzanine.pages.managers import PageManager
 from mezzanine.utils.urls import path_to_slug, slugify, admin_url
@@ -305,6 +307,19 @@ class Moderated(models.Model):
         send_mail(subject, body, _from, to, fail_silently=not(settings.DEBUG))
         
         return publishers
+        
+    @property
+    def current_status(self):
+        if self.status == CONTENT_STATUS_DRAFT:
+            if self.approval == Moderated.PENDING:
+                return ("pending", "Pending approval")
+            elif self.approval == Moderated.REJECTED:
+                return ("rejected", "Rejected")
+            return ("draft", "Draft")
+        pdate = localize(self.publish_date)
+        if self.publish_date < now():
+            return ("published", "Approved, published on %s" % pdate)
+        return ("approved", "Approved, to be published on %s" % pdate)
         
 
 class ModeratedPage(Page, Moderated):
