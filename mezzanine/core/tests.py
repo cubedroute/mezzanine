@@ -15,6 +15,11 @@ from django.test import TestCase
 from django.utils.html import strip_tags
 from django.utils.http import int_to_base36
 from django.contrib.sites.models import Site
+from django.contrib.auth.models import Group
+from django.test.utils import override_settings
+from django.contrib.admin.sites import AdminSite
+from django.test.client import RequestFactory
+
 from PIL import Image
 
 from mezzanine.accounts import get_profile_model, get_profile_user_fieldname
@@ -30,13 +35,15 @@ from mezzanine.forms.models import Form
 from mezzanine.galleries.models import Gallery, GALLERIES_UPLOAD_DIR
 from mezzanine.generic.forms import RatingForm
 from mezzanine.generic.models import ThreadedComment, AssignedKeyword, Keyword
-from mezzanine.pages.models import Page, RichTextPage
+from mezzanine.pages.models import Page, RichTextPage, ModeratedPage
 from mezzanine.urls import PAGES_SLUG
 from mezzanine.utils.importing import import_dotted_path
 from mezzanine.utils.tests import copy_test_to_media, run_pyflakes_for_package
 from mezzanine.utils.tests import run_pep8_for_package
 from mezzanine.utils.models import get_user_model
 from mezzanine.core.managers import DisplayableManager
+from mezzanine.utils.urls import admin_url
+from mezzanine.pages.admin import ModeratedPageAdmin
 
 User = get_user_model()
 
@@ -697,3 +704,105 @@ class Tests(TestCase):
         self.assertFalse(manager._search_fields)
         manager = DisplayableManager(search_fields={'foo': 10})
         self.assertTrue(manager._search_fields)
+ 
+
+@override_settings(INSTALLED_APPS=settings.INSTALLED_APPS + ["grappelli_safe",])
+class ModeratedPagesTests(TestCase):
+    """
+    Tests specific to moderated scheduled publishing using ``Moderated``.
+    """
+    
+    def setUp(self):
+        # Create admin user in Author group
+        args = ("author", "author@example.com", "author")
+        self.author = User.objects.create_superuser(*args)
+        group = Group.objects.get_or_create(name="Author")[0]
+        self.author.groups.add(group)
+        self.author.save()
+        
+        # Create admin user in Publisher group
+        args = ("publisher", "publisher@example.com", "publisher")
+        self.publisher = User.objects.create_superuser(*args)
+        group = Group.objects.get_or_create(name="Publisher")[0]
+        self.publisher.groups.add(group)
+        self.publisher.save()
+        
+        # Admin Add and Edit page URLs
+        self.add_url = admin_url(ModeratedPage, "add")
+        self.page = ModeratedPage.objects.create(title="test", 
+            status=CONTENT_STATUS_DRAFT)
+        self.change_url = self.page.admin_url
+        
+        self.factory = RequestFactory()
+        
+    def test_moderatedpage_admin_buttons(self):
+        """
+        Test that the admin add and edit pages for a ``Moderated`` subclass
+        contains the required buttons.
+        """
+        # Buttons to check for in an Author page
+        draft_btn = '<input type="submit" value="Save as draft" class="default" name="save_draft" />'
+        pending_btn = '<input type="submit" value="Save for approval" name="save_pending" />'
+
+        # Buttons to check for in a Publisher page
+        publish_btn = '<input type="submit" value="Publish now" class="default" name="save_published" />'
+        approved_btn = '<input type="submit" value="Save as approved" name="save_approved" />'
+        rejected_btn = '<input type="submit" value="Save as rejected" name="save_rejected" />'
+        
+        self.client.login(username="author", password="author")
+        
+        response = self.client.get(self.add_url)
+        self.assertContains(response, draft_btn, 1, html=True)
+        self.assertContains(response, pending_btn, 1, html=True)
+        
+        response = self.client.get(self.change_url)
+        self.assertContains(response, draft_btn, 1, html=True)
+        self.assertContains(response, pending_btn, 1, html=True)
+        
+        self.client.login(username="publisher", password="publisher")
+        
+        response = self.client.get(self.add_url)
+        self.assertContains(response, publish_btn, 1, html=True)
+        self.assertContains(response, approved_btn, 1, html=True)
+        self.assertContains(response, rejected_btn, 1, html=True)
+        
+        response = self.client.get(self.change_url)
+        self.assertContains(response, publish_btn, 1, html=True)
+        self.assertContains(response, approved_btn, 1, html=True)
+        self.assertContains(response, rejected_btn, 1, html=True)
+        
+    def test_moderatedpage_admin_submit(self):
+        site = AdminSite()
+        admin = ModeratedPageAdmin(ModeratedPage, site)
+        
+        request = self.factory.post(self.change_url, {"save_pending": ""})
+        request.user = self.author
+        admin.save_model(request, self.page, None, True)
+        self.assertEqual(self.page.approval, ModeratedPage.PENDING)
+        self.assertEqual(self.page.status, CONTENT_STATUS_DRAFT)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(self.change_url, mail.outbox[0].body)
+        
+        request = self.factory.post(self.change_url, {"save_draft": ""})
+        request.user = self.author
+        admin.save_model(request, self.page, None, True)
+        self.assertEqual(self.page.approval, None)
+        self.assertEqual(self.page.status, CONTENT_STATUS_DRAFT)
+        
+        request = self.factory.post(self.change_url, {"save_approved": ""})
+        request.user = self.publisher
+        admin.save_model(request, self.page, None, True)
+        self.assertEqual(self.page.approval, ModeratedPage.APPROVED)
+        self.assertEqual(self.page.status, CONTENT_STATUS_PUBLISHED)
+        
+        request = self.factory.post(self.change_url, {"save_rejected": ""})
+        request.user = self.publisher
+        admin.save_model(request, self.page, None, True)
+        self.assertEqual(self.page.approval, ModeratedPage.REJECTED)
+        self.assertEqual(self.page.status, CONTENT_STATUS_DRAFT)
+        
+        request = self.factory.post(self.change_url, {"save_published": ""})
+        request.user = self.publisher
+        admin.save_model(request, self.page, None, True)
+        self.assertEqual(self.page.approval, ModeratedPage.APPROVED)
+        self.assertEqual(self.page.status, CONTENT_STATUS_PUBLISHED)
