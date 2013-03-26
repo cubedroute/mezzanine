@@ -262,6 +262,8 @@ class ModeratedPageAdmin(PageAdmin):
     def render_change_form(self, request, context, *args, **kwargs):
         context['author'] = self._is_author(request)
         context['publisher'] = self._is_publisher(request)
+        obj = context.get("original", None)
+        context['current_status'] = obj and obj.current_status
         return super(ModeratedPageAdmin, self).render_change_form(
             request, context, *args, **kwargs)
         

@@ -30,7 +30,7 @@
 {% endif %}{% endblock %}
 
 <!-- CONTENT -->
-{% block content_title %}{% if title %}<h1>{{ title }}{% if original %} ({{ original.current_status.1 }}){% endif %}</h1>{% endif %}{% endblock %}
+{% block content_title %}{% if title %}<h1>{{ title }}{% if current_status %} ({{ current_status.1 }}){% endif %}</h1>{% endif %}{% endblock %}
 {% block content %}
 <div id="content-main">
 
