@@ -202,6 +202,7 @@ def mezzanine_submit_row(context):
     change = context['change']
     is_popup = context['is_popup']
     save_as = context['save_as']
+    has_change_permission = context['has_change_permission']
     return {
         'onclick_attrib': (opts.get_ordered_objects() and change
                             and 'onclick="submitOrderForm();"' or ''),
@@ -210,7 +211,7 @@ def mezzanine_submit_row(context):
         'show_save_as_new': not is_popup and change and save_as,
         'show_save_and_add_another': context['has_add_permission'] and
                             not is_popup and (not save_as or context['add']),
-        'show_save_and_continue': not is_popup and context['has_change_permission'],
+        'show_save_and_continue': not is_popup and has_change_permission,
         'is_popup': is_popup,
         'show_save': True,
         'author': context.get('author', None),

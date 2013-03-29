@@ -13,7 +13,8 @@ from mezzanine.conf import settings
 from mezzanine.core.admin import DisplayableAdmin, DisplayableAdminForm
 from mezzanine.pages.models import Page, RichTextPage, Link, ModeratedPage, \
     Workflow
-from mezzanine.core.models import CONTENT_STATUS_DRAFT, CONTENT_STATUS_PUBLISHED
+from mezzanine.core.models import CONTENT_STATUS_DRAFT, \
+    CONTENT_STATUS_PUBLISHED
 from mezzanine.utils.urls import admin_url
 
 try:
@@ -250,12 +251,12 @@ moderated_page_fieldsets[0][1]["fields"].remove("status")
 
 
 class ModeratedPageAdmin(PageAdmin):
-    
+
     fieldsets = moderated_page_fieldsets
-    
+
     def _is_publisher(self, request):
         return request.user.groups.filter(name="Publisher").exists()
-    
+
     def _is_author(self, request):
         return request.user.groups.filter(name="Author").exists()
 
@@ -266,7 +267,7 @@ class ModeratedPageAdmin(PageAdmin):
         context['current_status'] = obj and obj.current_status
         return super(ModeratedPageAdmin, self).render_change_form(
             request, context, *args, **kwargs)
-        
+
     def save_model(self, request, obj, form, change):
         """
         Check button clicked and set status accordingly.
@@ -274,7 +275,7 @@ class ModeratedPageAdmin(PageAdmin):
         is_publisher = self._is_publisher(request)
         comment = "Saved as draft"
         next_task_users = []
-        
+
         if "save_pending" in request.POST:
             obj.approval = ModeratedPage.PENDING
             obj.status = CONTENT_STATUS_DRAFT
@@ -296,7 +297,7 @@ class ModeratedPageAdmin(PageAdmin):
             obj.approval = None
             obj.status = CONTENT_STATUS_DRAFT
             next_task_users = [request.user]
-        
+
         if reversion:
             with reversion.create_revision():
                 obj.save()
@@ -304,10 +305,10 @@ class ModeratedPageAdmin(PageAdmin):
                 reversion.set_comment(comment)
         else:
             obj.save()
-            
+
         if obj.approval == ModeratedPage.PENDING:
             next_task_users = obj.send_pending_email()
-            
+
         try:
             workflow_record = Workflow.objects.get(
                 content_type=ContentType.objects.get_for_model(obj),
@@ -319,10 +320,10 @@ class ModeratedPageAdmin(PageAdmin):
         workflow_record.change_user = request.user
         workflow_record.status = comment
         workflow_record.save()
-        
+
         workflow_record.task_users = next_task_users
         workflow_record.save()
-        
+
 
 admin.site.register(Page, PageAdmin)
 admin.site.register(RichTextPage, PageAdmin)

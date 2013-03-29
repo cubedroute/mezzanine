@@ -1,5 +1,6 @@
 from django.core.urlresolvers import resolve, reverse
 from django.db import models
+from django.db.models import Q
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.auth.models import Group, User
 from django.core.mail import send_mail
@@ -10,7 +11,8 @@ from django.utils.timezone import now
 from django.utils.formats import localize
 
 from mezzanine.conf import settings
-from mezzanine.core.models import Displayable, Orderable, RichText, CONTENT_STATUS_DRAFT
+from mezzanine.core.models import Displayable, Orderable, RichText, \
+    CONTENT_STATUS_DRAFT
 from mezzanine.pages.fields import MenusField
 from mezzanine.pages.managers import PageManager
 from mezzanine.utils.urls import path_to_slug, slugify, admin_url
@@ -264,50 +266,54 @@ class Page(BasePage):
 
 
 class Moderated(models.Model):
-    
+
     PENDING = 1
     APPROVED = 2
     REJECTED = 3
-    
+
     APPROVAL_STATES = (
         (PENDING, _("Pending")),
         (APPROVED, _("Approved")),
         (REJECTED, _("Rejected")),
     )
-    
-    approval = models.IntegerField(choices=APPROVAL_STATES, null=True, 
+
+    approval = models.IntegerField(choices=APPROVAL_STATES, null=True,
         editable=False)
     owning_group = models.ForeignKey(Group, verbose_name=_("Owning group"),
-        limit_choices_to=~(models.Q(name="Author") | models.Q(name="Publisher")),
+        limit_choices_to=~(Q(name="Author") | Q(name="Publisher")),
         blank=True, null=True)
-            
+
     class Meta:
         abstract = True
-        
+
     def can_add(self, request):
         return request.user.groups.filter(name="Author").exists()
-        
+
     @property
     def admin_url(self):
         return admin_url(self.__class__, "change", self.pk)
-            
-    def send_pending_email(self):
-        subject = "Draft %s needs moderation" % self._meta.verbose_name.lower()
 
-        body = "http://%s%s" % (Site.objects.get_current().domain, self.admin_url)
-        
+    def send_pending_email(self):
+        _type = self._meta.verbose_name.lower()
+        subject = "Draft %s needs moderation" % _type
+
+        site = Site.objects.get_current()
+        body = "http://%s%s" % (site.domain, self.admin_url)
+
         publishers = []
+        q = Q(groups__name="Publisher")
         if self.owning_group:
-            publishers = self.owning_group.user_set.filter(groups__name="Publisher")
-        publishers = publishers or User.objects.filter(groups__name="Publisher")
+            publishers = User.objects.filter(groups=self.owning_group)\
+                .filter(q)
+        publishers = publishers or User.objects.filter(q)
         to = publishers.values_list("email", flat=True).distinct()
-        
+
         _from = getattr(settings, "DEFAULT_FROM_EMAIL", None)
-        
+
         send_mail(subject, body, _from, to, fail_silently=not(settings.DEBUG))
-        
+
         return publishers
-        
+
     @property
     def current_status(self):
         if self.status == CONTENT_STATUS_DRAFT:
@@ -320,15 +326,15 @@ class Moderated(models.Model):
         if self.publish_date < now():
             return ("published", "Approved, published on %s" % pdate)
         return ("approved", "Approved, to be published on %s" % pdate)
-        
+
 
 class ModeratedPage(Page, Moderated):
-    
+
     class Meta:
         verbose_name = _("Moderated page")
         verbose_name_plural = _("Moderated pages")
-        
-        
+
+
 class RichTextPage(Page, RichText):
     """
     Implements the default type of page with a single Rich Text
@@ -352,10 +358,13 @@ class Link(Page):
 
 
 class Workflow(models.Model):
-    change_user = models.ForeignKey(User, related_name="changes_made") # User who made the change
-    task_users = models.ManyToManyField(User, related_name="tasks_for", blank=True, null=True) # Users on whose task list this item should be shown
+    # User who made the change
+    change_user = models.ForeignKey(User, related_name="changes_made")
+    # Users on whose task list this item should be shown
+    task_users = models.ManyToManyField(User, related_name="tasks_for",
+        blank=True, null=True)
     status = models.CharField(max_length=255)
-    
+
     content_type = models.ForeignKey(ContentType)
     object_id = models.PositiveIntegerField()
     content_object = generic.GenericForeignKey('content_type', 'object_id')

@@ -3,6 +3,7 @@ import os
 from shutil import rmtree
 from urlparse import urlparse
 from uuid import uuid4
+from datetime import timedelta
 
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.contenttypes.models import ContentType
@@ -19,6 +20,7 @@ from django.contrib.auth.models import Group
 from django.test.utils import override_settings
 from django.contrib.admin.sites import AdminSite
 from django.test.client import RequestFactory
+from django.utils.timezone import now
 
 from PIL import Image
 
@@ -35,7 +37,7 @@ from mezzanine.forms.models import Form
 from mezzanine.galleries.models import Gallery, GALLERIES_UPLOAD_DIR
 from mezzanine.generic.forms import RatingForm
 from mezzanine.generic.models import ThreadedComment, AssignedKeyword, Keyword
-from mezzanine.pages.models import Page, RichTextPage, ModeratedPage
+from mezzanine.pages.models import Page, RichTextPage, ModeratedPage, Workflow
 from mezzanine.urls import PAGES_SLUG
 from mezzanine.utils.importing import import_dotted_path
 from mezzanine.utils.tests import copy_test_to_media, run_pyflakes_for_package
@@ -704,77 +706,103 @@ class Tests(TestCase):
         self.assertFalse(manager._search_fields)
         manager = DisplayableManager(search_fields={'foo': 10})
         self.assertTrue(manager._search_fields)
- 
 
-@override_settings(INSTALLED_APPS=settings.INSTALLED_APPS + ["grappelli_safe",])
+
+@override_settings(
+    INSTALLED_APPS=settings.INSTALLED_APPS + ["grappelli_safe"])
 class ModeratedPagesTests(TestCase):
     """
     Tests specific to moderated scheduled publishing using ``Moderated``.
     """
-    
+
     def setUp(self):
         # Create admin user in Author group
         args = ("author", "author@example.com", "author")
         self.author = User.objects.create_superuser(*args)
-        group = Group.objects.get_or_create(name="Author")[0]
-        self.author.groups.add(group)
+        author_group = Group.objects.get_or_create(name="Author")[0]
+        self.author.groups.add(author_group)
         self.author.save()
-        
+
         # Create admin user in Publisher group
         args = ("publisher", "publisher@example.com", "publisher")
         self.publisher = User.objects.create_superuser(*args)
-        group = Group.objects.get_or_create(name="Publisher")[0]
-        self.publisher.groups.add(group)
+        publisher_group = Group.objects.get_or_create(name="Publisher")[0]
+        self.publisher.groups.add(publisher_group)
         self.publisher.save()
-        
+
+        # Create an author in a non-system group (Sales)
+        self.sales_group = Group.objects.get_or_create(name="Sales")[0]
+        args = ("sales", "sales@example.com", "sales")
+        self.sales_author = User.objects.create_superuser(*args)
+        self.sales_author.groups = [author_group, self.sales_group]
+        self.sales_author.save()
+
+        # Create a publisher in a non-system group (Sales)
+        args = ("sales1", "sales1@example.com", "sales1")
+        self.sales_publisher = User.objects.create_superuser(*args)
+        self.sales_publisher.groups = [publisher_group, self.sales_group]
+        self.sales_publisher.save()
+
+        # Create a moderated page for testing, set publish date to
+        # some time in the future for testing the 'Publish now' feature
+        self.publish_date = now() + timedelta(days=1)
+        self.page = ModeratedPage.objects.create(title="test",
+            status=CONTENT_STATUS_DRAFT, publish_date=self.publish_date)
+
         # Admin Add and Edit page URLs
         self.add_url = admin_url(ModeratedPage, "add")
-        self.page = ModeratedPage.objects.create(title="test", 
-            status=CONTENT_STATUS_DRAFT)
         self.change_url = self.page.admin_url
-        
+
         self.factory = RequestFactory()
-        
+
     def test_moderatedpage_admin_buttons(self):
         """
         Test that the admin add and edit pages for a ``Moderated`` subclass
         contains the required buttons.
         """
         # Buttons to check for in an Author page
-        draft_btn = '<input type="submit" value="Save as draft" class="default" name="save_draft" />'
-        pending_btn = '<input type="submit" value="Save for approval" name="save_pending" />'
+        draft_btn = '<input type="submit" value="Save as draft" \
+            class="default" name="save_draft" />'
+        pending_btn = '<input type="submit" value="Save for approval" \
+            name="save_pending" />'
 
         # Buttons to check for in a Publisher page
-        publish_btn = '<input type="submit" value="Publish now" class="default" name="save_published" />'
-        approved_btn = '<input type="submit" value="Save as approved" name="save_approved" />'
-        rejected_btn = '<input type="submit" value="Save as rejected" name="save_rejected" />'
-        
+        publish_btn = '<input type="submit" value="Publish now" \
+            class="default" name="save_published" />'
+        approved_btn = '<input type="submit" value="Save as approved" \
+            name="save_approved" />'
+        rejected_btn = '<input type="submit" value="Save as rejected" \
+            name="save_rejected" />'
+
         self.client.login(username="author", password="author")
-        
+
         response = self.client.get(self.add_url)
         self.assertContains(response, draft_btn, 1, html=True)
         self.assertContains(response, pending_btn, 1, html=True)
-        
+
         response = self.client.get(self.change_url)
         self.assertContains(response, draft_btn, 1, html=True)
         self.assertContains(response, pending_btn, 1, html=True)
-        
+
         self.client.login(username="publisher", password="publisher")
-        
+
         response = self.client.get(self.add_url)
         self.assertContains(response, publish_btn, 1, html=True)
         self.assertContains(response, approved_btn, 1, html=True)
         self.assertContains(response, rejected_btn, 1, html=True)
-        
+
         response = self.client.get(self.change_url)
         self.assertContains(response, publish_btn, 1, html=True)
         self.assertContains(response, approved_btn, 1, html=True)
         self.assertContains(response, rejected_btn, 1, html=True)
-        
+
     def test_moderatedpage_admin_submit(self):
         site = AdminSite()
         admin = ModeratedPageAdmin(ModeratedPage, site)
-        
+        content_type = ContentType.objects.get_for_model(ModeratedPage)
+        object_id = self.page.id
+        workflow_q = dict(content_type=content_type, object_id=object_id)
+
         request = self.factory.post(self.change_url, {"save_pending": ""})
         request.user = self.author
         admin.save_model(request, self.page, None, True)
@@ -782,27 +810,61 @@ class ModeratedPagesTests(TestCase):
         self.assertEqual(self.page.status, CONTENT_STATUS_DRAFT)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn(self.change_url, mail.outbox[0].body)
-        
+        self.assertEqual(len(mail.outbox[0].to), 2)
+
+        workflow_record = Workflow.objects.get(**workflow_q)
+        self.assertEqual(workflow_record.change_user, self.author)
+        self.assertEqual(workflow_record.status, "Saved as pending approval")
+        self.assertEqual(workflow_record.task_users.all().count(), 2)
+
         request = self.factory.post(self.change_url, {"save_draft": ""})
         request.user = self.author
         admin.save_model(request, self.page, None, True)
         self.assertEqual(self.page.approval, None)
         self.assertEqual(self.page.status, CONTENT_STATUS_DRAFT)
-        
+
+        workflow_record = Workflow.objects.get(**workflow_q)
+        self.assertEqual(workflow_record.change_user, self.author)
+        self.assertEqual(workflow_record.status, "Saved as draft")
+        self.assertEqual(workflow_record.task_users.all().count(), 1)
+
         request = self.factory.post(self.change_url, {"save_approved": ""})
         request.user = self.publisher
         admin.save_model(request, self.page, None, True)
         self.assertEqual(self.page.approval, ModeratedPage.APPROVED)
         self.assertEqual(self.page.status, CONTENT_STATUS_PUBLISHED)
-        
+
+        workflow_record = Workflow.objects.get(**workflow_q)
+        self.assertEqual(workflow_record.change_user, self.publisher)
+        self.assertEqual(workflow_record.status, "Approved")
+        self.assertEqual(workflow_record.task_users.all().count(), 0)
+
         request = self.factory.post(self.change_url, {"save_rejected": ""})
         request.user = self.publisher
         admin.save_model(request, self.page, None, True)
         self.assertEqual(self.page.approval, ModeratedPage.REJECTED)
         self.assertEqual(self.page.status, CONTENT_STATUS_DRAFT)
-        
+
+        workflow_record = Workflow.objects.get(**workflow_q)
+        self.assertEqual(workflow_record.change_user, self.publisher)
+        self.assertEqual(workflow_record.status, "Rejected")
+        self.assertEqual(workflow_record.task_users.all().count(), 0)
+
         request = self.factory.post(self.change_url, {"save_published": ""})
         request.user = self.publisher
         admin.save_model(request, self.page, None, True)
         self.assertEqual(self.page.approval, ModeratedPage.APPROVED)
         self.assertEqual(self.page.status, CONTENT_STATUS_PUBLISHED)
+
+        workflow_record = Workflow.objects.get(**workflow_q)
+        self.assertEqual(workflow_record.change_user, self.publisher)
+        self.assertEqual(workflow_record.status, "Published")
+        self.assertEqual(workflow_record.task_users.all().count(), 0)
+        self.assertNotEqual(self.page.publish_date, self.publish_date)
+
+        self.page.owning_group = self.sales_group
+        self.page.save()
+        request = self.factory.post(self.change_url, {"save_pending": ""})
+        request.user = self.author
+        admin.save_model(request, self.page, None, True)
+        self.assertEqual(len(mail.outbox[1].to), 1)
